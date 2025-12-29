@@ -329,21 +329,30 @@ function GameView({ gameState, playerState, send, error }: GameViewProps) {
       <div className="flex-1 flex flex-col p-4 gap-4">
         {/* Opponents area */}
         <div className="flex justify-center gap-8 flex-wrap">
-          {opponents.map((opponent) => (
-            <OpponentHand
-              key={opponent.seat}
-              cardCount={
-                gameState.phase === "waiting" || gameState.phase === "deal"
-                  ? 0
-                  : Math.max(0, 4 - (gameState.pegHistory?.filter(p => p.player_seat === opponent.seat).length || 0))
-              }
-              playerName={opponent.name}
-              isDealer={opponent.seat === gameState.current_dealer_seat}
-              isCurrentTurn={opponent.seat === gameState.current_turn_seat}
-              connected={opponent.connected}
-              score={opponent.score}
-            />
-          ))}
+          {opponents.map((opponent) => {
+            // Calculate opponent's remaining cards based on phase
+            let cardCount = 0;
+            if (gameState.phase === "discard") {
+              // During discard, opponents have their full dealt hand (6 for 2-player, 5 for 3-4)
+              cardCount = gameState.player_count === 2 ? 6 : 5;
+            } else if (gameState.phase === "cut" || gameState.phase === "pegging") {
+              // After discard, they have 4 cards minus what they've played
+              const cardsPlayed = gameState.cardsPlayedPerSeat?.[opponent.seat] || 0;
+              cardCount = Math.max(0, 4 - cardsPlayed);
+            }
+            // hand_scoring phase = 0 cards (all played)
+            return (
+              <OpponentHand
+                key={opponent.seat}
+                cardCount={cardCount}
+                playerName={opponent.name}
+                isDealer={opponent.seat === gameState.current_dealer_seat}
+                isCurrentTurn={opponent.seat === gameState.current_turn_seat}
+                connected={opponent.connected}
+                score={opponent.score}
+              />
+            );
+          })}
         </div>
 
         {/* Center area */}

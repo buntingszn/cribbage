@@ -14,6 +14,20 @@ class GameService:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    def _get_player_by_seat(self, players: list, seat: int) -> PlayerDB | None:
+        """Safely get player by seat number"""
+        for p in players:
+            if p.seat == seat:
+                return p
+        return None
+
+    def _get_hand_by_player_id(self, hands: list, player_id: str) -> PlayerHandDB | None:
+        """Safely get hand by player ID"""
+        for h in hands:
+            if h.player_id == player_id:
+                return h
+        return None
+
     async def create_game(
         self, player_count: int, creator_name: str
     ) -> tuple[GameDB, PlayerDB]:
@@ -232,9 +246,10 @@ class GameService:
         # Check for His Heels (Jack as cut card = 2 points for dealer)
         dealer_points = 0
         if cut_card[0] == "J":
-            dealer = next(p for p in game.players if p.seat == game.current_dealer_seat)
-            dealer.score += 2
-            dealer_points = 2
+            dealer = self._get_player_by_seat(game.players, game.current_dealer_seat)
+            if dealer:
+                dealer.score += 2
+                dealer_points = 2
 
         game.current_phase = "pegging"
         game.current_turn_seat = (game.current_dealer_seat + 1) % game.player_count
@@ -326,8 +341,8 @@ class GameService:
 
         current_round.peg_history = json.dumps(peg_history)
 
-        # Determine next turn
-        await self._advance_peg_turn(game, current_round)
+        # Determine next turn (pass current player's seat for Go point tracking)
+        await self._advance_peg_turn(game, current_round, last_player_seat=player.seat)
 
         await self.session.commit()
 
@@ -350,24 +365,28 @@ class GameService:
             sequence.insert(0, play)
         return sequence
 
-    async def _advance_peg_turn(self, game: GameDB, current_round: RoundDB):
-        """Advance to next player's turn in pegging, handling Go and phase transitions"""
+    async def _advance_peg_turn(self, game: GameDB, current_round: RoundDB, last_player_seat: int | None = None):
+        """Advance to next player's turn in pegging, handling Go and phase transitions.
+
+        last_player_seat: The seat of the player who just played/went Go (for awarding Go points)
+        """
         all_hands = await self.get_all_hands_for_round(current_round.id)
 
         # Check if all cards have been played
         all_empty = all(len(json.loads(h.current_cards)) == 0 for h in all_hands)
         if all_empty:
             # Award last card point if not 31
-            if game.peg_count != 31:
-                current_player = next(p for p in game.players if p.seat == game.current_turn_seat)
-                current_player.score += 1
+            if game.peg_count != 31 and last_player_seat is not None:
+                last_player = self._get_player_by_seat(game.players, last_player_seat)
+                if last_player:
+                    last_player.score += 1
 
             # Move to scoring phase
             game.current_phase = "hand_scoring"
             game.current_turn_seat = (game.current_dealer_seat + 1) % game.player_count
             return
 
-        # If count hit 31, reset
+        # If count hit 31, reset (player who hit 31 already got 2 points)
         if game.peg_count == 31:
             game.peg_count = 0
             peg_history = json.loads(current_round.peg_history)
@@ -377,8 +396,12 @@ class GameService:
         # Find next player who can play
         for i in range(1, game.player_count + 1):
             next_seat = (game.current_turn_seat + i) % game.player_count
-            next_player = next(p for p in game.players if p.seat == next_seat)
-            hand = next(h for h in all_hands if h.player_id == next_player.id)
+            next_player = self._get_player_by_seat(game.players, next_seat)
+            if not next_player:
+                continue
+            hand = self._get_hand_by_player_id(all_hands, next_player.id)
+            if not hand:
+                continue
             cards = json.loads(hand.current_cards)
 
             valid_plays = pegging.valid_peg_plays(cards, game.peg_count)
@@ -386,7 +409,12 @@ class GameService:
                 game.current_turn_seat = next_seat
                 return
 
-        # No one can play - reset count and find someone with cards
+        # No one can play - award Go point to last player who played, then reset
+        if last_player_seat is not None:
+            last_player = self._get_player_by_seat(game.players, last_player_seat)
+            if last_player:
+                last_player.score += 1  # Go point
+
         game.peg_count = 0
         peg_history = json.loads(current_round.peg_history)
         peg_history.append({"type": "reset"})
@@ -394,8 +422,12 @@ class GameService:
 
         for i in range(1, game.player_count + 1):
             next_seat = (game.current_turn_seat + i) % game.player_count
-            next_player = next(p for p in game.players if p.seat == next_seat)
-            hand = next(h for h in all_hands if h.player_id == next_player.id)
+            next_player = self._get_player_by_seat(game.players, next_seat)
+            if not next_player:
+                continue
+            hand = self._get_hand_by_player_id(all_hands, next_player.id)
+            if not hand:
+                continue
             cards = json.loads(hand.current_cards)
             if cards:
                 game.current_turn_seat = next_seat
@@ -425,7 +457,14 @@ class GameService:
         peg_history.append({"seat": player.seat, "type": "go"})
         current_round.peg_history = json.dumps(peg_history)
 
-        await self._advance_peg_turn(game, current_round)
+        # Find the last player who actually played a card (for Go point)
+        last_play_seat = None
+        for entry in reversed(peg_history):
+            if entry.get("type") != "go" and entry.get("type") != "reset" and "card" in entry:
+                last_play_seat = entry["seat"]
+                break
+
+        await self._advance_peg_turn(game, current_round, last_player_seat=last_play_seat)
         await self.session.commit()
 
         return {
@@ -467,20 +506,36 @@ class GameService:
         # Score in order: non-dealer first, then dealer, then crib
         sorted_players = sorted(game.players, key=lambda p: p.seat)
 
+        # Find dealer index safely
+        dealer_idx = None
+        for i, p in enumerate(sorted_players):
+            if p.seat == game.current_dealer_seat:
+                dealer_idx = i
+                break
+        if dealer_idx is None:
+            raise ValueError("Dealer not found")
+
         # Reorder so non-dealer scores first
-        dealer_idx = next(i for i, p in enumerate(sorted_players) if p.seat == game.current_dealer_seat)
         scoring_order = sorted_players[dealer_idx + 1:] + sorted_players[:dealer_idx + 1]
 
         for player in scoring_order:
-            hand = next(h for h in all_hands if h.player_id == player.id)
-            dealt_cards = json.loads(hand.dealt_cards)
-            # Get the 4 cards kept (not the discards)
-            kept_cards = json.loads(hand.current_cards) if json.loads(hand.current_cards) else dealt_cards[:4]
+            hand = self._get_hand_by_player_id(all_hands, player.id)
+            if not hand:
+                continue
 
-            # Actually we need to get original 4 kept cards, not pegged
-            # Let's use dealt_cards minus crib_cards
-            crib_cards = json.loads(current_round.crib_cards)
-            kept_cards = [c for c in dealt_cards if c not in crib_cards or dealt_cards.count(c) > crib_cards.count(c)][:4]
+            # The 4 kept cards are in pegged_cards (cards played during pegging)
+            # After pegging, all kept cards have been played
+            kept_cards = json.loads(hand.pegged_cards)
+
+            # If pegging hasn't completed yet (shouldn't happen), fall back to dealt minus discards
+            if len(kept_cards) != 4:
+                dealt_cards = json.loads(hand.dealt_cards)
+                current_cards = json.loads(hand.current_cards)
+                # Cards still in hand + cards already pegged = kept cards
+                kept_cards = current_cards + json.loads(hand.pegged_cards)
+                if len(kept_cards) != 4:
+                    # Last resort: first 4 dealt cards (shouldn't reach here)
+                    kept_cards = dealt_cards[:4]
 
             score_result = scoring.score_hand(kept_cards, cut_card, is_crib=False)
             player.score += score_result["total"]
@@ -501,7 +556,9 @@ class GameService:
                 return results
 
         # Score crib for dealer
-        dealer = next(p for p in game.players if p.seat == game.current_dealer_seat)
+        dealer = self._get_player_by_seat(game.players, game.current_dealer_seat)
+        if not dealer:
+            raise ValueError("Dealer not found")
         crib_cards = json.loads(current_round.crib_cards)
         crib_result = scoring.score_hand(crib_cards, cut_card, is_crib=True)
         dealer.score += crib_result["total"]

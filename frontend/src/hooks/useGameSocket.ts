@@ -37,6 +37,8 @@ export interface GameState {
   pegHistory: PegPlay[];
   scoringResults: ScoreResult[];
   winner?: { seat: number; name: string };
+  // Track total cards played per seat (doesn't reset on 31)
+  cardsPlayedPerSeat: Record<number, number>;
 }
 
 export interface LocalPlayerState {
@@ -108,10 +110,15 @@ export function useGameSocketConnection(
     switch (msg.type) {
       case "state_sync": {
         const gameData = msg.game as Record<string, unknown>;
+        const players = (gameData.players as Array<{seat: number}>) || [];
+        // Initialize cards played tracking - 0 for all seats
+        const cardsPlayedPerSeat: Record<number, number> = {};
+        players.forEach(p => { cardsPlayedPerSeat[p.seat] = 0; });
         setGameState({
-          ...gameData as Omit<GameState, 'pegHistory' | 'scoringResults'>,
+          ...gameData as Omit<GameState, 'pegHistory' | 'scoringResults' | 'cardsPlayedPerSeat'>,
           pegHistory: [],
           scoringResults: [],
+          cardsPlayedPerSeat,
         } as GameState);
         setPlayerState({
           hand: msg.your_hand as string[],
@@ -144,6 +151,11 @@ export function useGameSocketConnection(
         setGameState((prev) => {
           if (!prev) return null;
           const newPhase = msg.phase as string;
+          // Reset card counts when entering discard phase (new round)
+          const resetCardCounts = newPhase === "discard";
+          const cardsPlayedPerSeat = resetCardCounts
+            ? Object.fromEntries(prev.players.map(p => [p.seat, 0]))
+            : prev.cardsPlayedPerSeat;
           return {
             ...prev,
             phase: newPhase,
@@ -152,6 +164,9 @@ export function useGameSocketConnection(
             // Reset peg history when phase changes away from pegging
             pegHistory: newPhase === "pegging" ? prev.pegHistory : [],
             peg_count: newPhase === "pegging" ? prev.peg_count : 0,
+            cardsPlayedPerSeat,
+            // Clear scoring results on new round
+            scoringResults: resetCardCounts ? [] : prev.scoringResults,
           };
         });
         break;
@@ -187,12 +202,16 @@ export function useGameSocketConnection(
         setGameState((prev) => {
           if (!prev) return null;
           const newCount = msg.count as number;
+          // Increment cards played for this player (never resets during a round)
+          const cardsPlayedPerSeat = {
+            ...prev.cardsPlayedPerSeat,
+            [play.player_seat]: (prev.cardsPlayedPerSeat[play.player_seat] || 0) + 1,
+          };
           return {
             ...prev,
             peg_count: newCount,
-            pegHistory: [...prev.pegHistory, play],
-            // Reset peg history if count is 0 (31 was reached)
-            ...(newCount === 0 ? { pegHistory: [] } : {}),
+            pegHistory: newCount === 0 ? [play] : [...prev.pegHistory, play],
+            cardsPlayedPerSeat,
             players: prev.players.map((p) =>
               p.seat === play.player_seat
                 ? { ...p, score: p.score + play.points }
