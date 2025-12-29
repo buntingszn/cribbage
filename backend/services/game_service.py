@@ -57,7 +57,10 @@ class GameService:
         result = await self.session.execute(
             select(PlayerDB)
             .where(PlayerDB.session_token == token)
-            .options(selectinload(PlayerDB.game).selectinload(GameDB.players))
+            .options(
+                selectinload(PlayerDB.game).selectinload(GameDB.players),
+                selectinload(PlayerDB.game).selectinload(GameDB.rounds),
+            )
         )
         return result.scalar_one_or_none()
 
@@ -83,15 +86,24 @@ class GameService:
         )
 
         self.session.add(player)
+        await self.session.flush()  # Ensure player is in DB before checking
+
+        # Reload game with updated players list
+        await self.session.refresh(game, ["players"])
 
         # Start game if full
-        if len(game.players) + 1 == game.player_count:
+        game_started = False
+        if len(game.players) == game.player_count:
             game.status = "playing"
-            game.current_phase = "deal"
+            game_started = True
 
         await self.session.commit()
-        await self.session.refresh(game)
         await self.session.refresh(player)
+
+        # Deal cards after commit so all players are available
+        if game_started:
+            await self.start_round(game)
+
         return game, player
 
     async def start_round(self, game: GameDB) -> RoundDB:
