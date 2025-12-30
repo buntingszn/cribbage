@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useCreateGame, useJoinGame, saveSession } from "../hooks/useGameApi";
-import { Users } from "lucide-react";
+import { useCreateGame, useJoinGame, useActiveGames, saveSession } from "../hooks/useGameApi";
+import { Users, Play, Clock } from "lucide-react";
 
 export default function HomePage() {
   const navigate = useNavigate();
@@ -17,6 +17,7 @@ export default function HomePage() {
 
   const createGame = useCreateGame();
   const joinGame = useJoinGame();
+  const { data: activeGames } = useActiveGames();
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -59,6 +60,48 @@ export default function HomePage() {
 
         {mode === "menu" && (
           <div className="space-y-4">
+            {activeGames && activeGames.length > 0 && (
+              <div className="mb-6">
+                <h2 className="text-lg font-medium text-slate-300 mb-3">
+                  Your Active Games
+                </h2>
+                <div className="space-y-2">
+                  {activeGames.map((game) => (
+                    <button
+                      key={game.code}
+                      onClick={() => navigate(`/game/${game.code}`)}
+                      className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-left transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <Play className="w-4 h-4 text-green-400" />
+                            <span className="font-medium text-white">
+                              {game.code}
+                            </span>
+                            <span className="text-sm text-slate-400">
+                              ({game.your_name})
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-sm text-slate-400">
+                            <span className="flex items-center gap-1">
+                              <Users className="w-3 h-3" />
+                              {game.current_players}/{game.player_count}
+                            </span>
+                            <span className="capitalize">
+                              {game.status === "waiting"
+                                ? "Waiting for players"
+                                : game.current_phase}
+                            </span>
+                          </div>
+                        </div>
+                        <Clock className="w-4 h-4 text-slate-500" />
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <button
               onClick={() => setMode("create")}
               className="w-full py-4 px-6 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold text-lg transition-colors"
@@ -146,6 +189,41 @@ export default function HomePage() {
 
         {mode === "join" && (
           <form onSubmit={handleJoin} className="space-y-6">
+            {activeGames && activeGames.length > 0 && (
+              <div className="mb-2">
+                <h2 className="text-sm font-medium text-slate-400 mb-2">
+                  Resume Active Game
+                </h2>
+                <div className="space-y-2">
+                  {activeGames.map((game) => (
+                    <button
+                      key={game.code}
+                      type="button"
+                      onClick={() => navigate(`/game/${game.code}`)}
+                      className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-left transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Play className="w-3 h-3 text-green-400" />
+                          <span className="font-medium text-white text-sm">
+                            {game.code}
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            ({game.your_name})
+                          </span>
+                        </div>
+                        <span className="text-xs text-slate-500">
+                          {game.current_players}/{game.player_count}
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-slate-700 mt-4 pt-4">
+                  <p className="text-sm text-slate-400 mb-3">Or join a new game:</p>
+                </div>
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-2">
                 Your Name

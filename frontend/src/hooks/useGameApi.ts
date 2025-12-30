@@ -96,3 +96,50 @@ export function getSession(gameCode: string): string | null {
 export function clearSession(gameCode: string) {
   localStorage.removeItem(`cribbage_${gameCode}`);
 }
+
+export function getAllSessions(): { gameCode: string; token: string }[] {
+  const sessions: { gameCode: string; token: string }[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith("cribbage_")) {
+      const gameCode = key.replace("cribbage_", "");
+      const token = localStorage.getItem(key);
+      if (token) {
+        sessions.push({ gameCode, token });
+      }
+    }
+  }
+  return sessions;
+}
+
+interface ActiveGameInfo {
+  code: string;
+  status: string;
+  player_count: number;
+  current_players: number;
+  your_name: string;
+  your_seat: number;
+  current_phase: string;
+  updated_at: string;
+}
+
+export function useActiveGames() {
+  return useQuery<ActiveGameInfo[]>({
+    queryKey: ["activeGames"],
+    queryFn: async () => {
+      const sessions = getAllSessions();
+      if (sessions.length === 0) return [];
+
+      const res = await fetch(`${API_BASE}/games/active`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_tokens: sessions.map((s) => s.token),
+        }),
+      });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 10000,
+  });
+}

@@ -116,3 +116,18 @@ class GameInfo(BaseModel):
     players: list[PlayerInfo]
     current_phase: str
     current_dealer_seat: int
+
+
+class ActiveGameInfo(BaseModel):
+    code: str
+    status: str
+    player_count: int
+    current_players: int
+    your_name: str
+    your_seat: int
+    current_phase: str
+    updated_at: str
+
+
+class ActiveGamesRequest(BaseModel):
+    session_tokens: list[str]

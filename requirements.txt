@@ -5,3 +5,5 @@ aiosqlite==0.20.0
 pydantic==2.10.0
 pydantic-settings==2.6.0
 python-multipart==0.0.20
+greenlet==3.3.0
+websockets==15.0.1

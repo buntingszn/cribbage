@@ -9,6 +9,8 @@ from ..models import (
     GameResponse,
     GameInfo,
     PlayerInfo,
+    ActiveGameInfo,
+    ActiveGamesRequest,
 )
 from ..services.game_service import GameService
 from ..services.websocket_manager import manager
@@ -148,3 +150,32 @@ async def reconnect(
         session_token=player.session_token,
         seat=player.seat,
     )
+
+
+@router.post("/active", response_model=list[ActiveGameInfo])
+async def get_active_games(
+    data: ActiveGamesRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Get all active games for the given session tokens."""
+    service = GameService(session)
+    games = []
+
+    for token in data.session_tokens[:20]:  # Limit to 20 tokens
+        player = await service.get_player_by_token(token)
+        if player and player.game.status != "finished":
+            game = player.game
+            games.append(
+                ActiveGameInfo(
+                    code=game.code,
+                    status=game.status,
+                    player_count=game.player_count,
+                    current_players=len(game.players),
+                    your_name=player.name,
+                    your_seat=player.seat,
+                    current_phase=game.current_phase,
+                    updated_at=game.updated_at.isoformat(),
+                )
+            )
+
+    return games
